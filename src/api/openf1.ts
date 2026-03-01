@@ -11,6 +11,18 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// Separate instance for large car_data requests
+const carDataApi = axios.create({
+  baseURL: BASE_URL,
+  timeout: 60000,
+  // Prevent axios from URL-encoding operator chars in param keys (>, <, >=)
+  paramsSerializer: (params: Record<string, unknown>) => {
+    return Object.entries(params)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+      .join('&')
+  },
+})
+
 // Cache implementation
 const cache = new Map<string, { data: unknown; timestamp: number }>()
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes for live data
@@ -28,6 +40,11 @@ async function cachedGet<T>(url: string, params: Record<string, unknown> = {}, i
   const response = await api.get<T>(url, { params })
   cache.set(key, { data: response.data, timestamp: Date.now() })
   return response.data
+}
+
+// Format a JS Date to OpenF1's expected format: "2024-12-08T13:10:17.466000" (no timezone suffix)
+function toOpenF1DateStr(d: Date): string {
+  return d.toISOString().replace('Z', '').replace(/(\.\d{3})\d*$/, '$1000')
 }
 
 export const openF1Api = {
@@ -54,13 +71,35 @@ export const openF1Api = {
     }, true),
 
   getCarDataForLap: async (session_key: number, driver_number: number, lap: Lap): Promise<CarData[]> => {
-    if (!lap.date_start) return []
+    if (!lap.date_start) throw new Error('该圈次缺少开始时间数据 (date_start)')
+
     const dateStart = new Date(lap.date_start)
-    return cachedGet<CarData[]>('/car_data', {
-      session_key,
-      driver_number,
-      date: `>=${dateStart.toISOString()}`,
-    }, true)
+    if (isNaN(dateStart.getTime())) throw new Error('圈次开始时间格式无效')
+
+    const lapDurationSec = lap.lap_duration ?? 120
+    // End time = lap start + lap duration + 3s buffer
+    const dateEnd = new Date(dateStart.getTime() + (lapDurationSec + 3) * 1000)
+
+    const cacheKey = `car_data_lap_${session_key}_${driver_number}_${lap.lap_number}`
+    const cached = cache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < HISTORICAL_CACHE_TTL) {
+      return cached.data as CarData[]
+    }
+
+    // OpenF1 API requires the comparison operator as part of the PARAMETER KEY,
+    // e.g. "date>" not "date" with value ">=...". Only > and < work; >= returns HTTP 500.
+    const response = await carDataApi.get<CarData[]>('/car_data', {
+      params: {
+        session_key,
+        driver_number,
+        'date>': toOpenF1DateStr(new Date(dateStart.getTime() - 500)), // 0.5s before lap start
+        'date<': toOpenF1DateStr(dateEnd),
+      },
+    })
+
+    const data = response.data ?? []
+    cache.set(cacheKey, { data, timestamp: Date.now() })
+    return data
   },
 
   getPositions: (session_key: number) =>
