@@ -47,7 +47,26 @@ function toOpenF1DateStr(d: Date): string {
   return d.toISOString().replace('Z', '').replace(/(\.\d{3})\d*$/, '$1000')
 }
 
+export interface Meeting {
+  meeting_key: number
+  meeting_name: string
+  meeting_official_name: string
+  location: string
+  country_key: number
+  country_code: string
+  country_name: string
+  country_flag: string
+  circuit_key: number
+  circuit_short_name: string
+  date_start: string
+  date_end: string
+  year: number
+}
+
 export const openF1Api = {
+  getMeetings: (year: number) =>
+    cachedGet<Meeting[]>('/meetings', { year }, year < new Date().getFullYear()),
+
   getSessions: (params: {
     year?: number
     session_key?: number
