@@ -141,6 +141,33 @@ export const openF1Api = {
 
   getLocation: (session_key: number, driver_number: number) =>
     cachedGet<Location[]>('/location', { session_key, driver_number }, true),
+
+  getLocationForLap: async (session_key: number, driver_number: number, lap: Lap): Promise<Location[]> => {
+    if (!lap.date_start) return []
+
+    const dateStart = new Date(lap.date_start)
+    const lapDurationMs = (lap.lap_duration ?? 120) * 1000
+    const dateEnd = new Date(dateStart.getTime() + lapDurationMs + 3000)
+
+    const cacheKey = `location_lap_${session_key}_${driver_number}_${lap.lap_number}`
+    const cached = cache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < HISTORICAL_CACHE_TTL) {
+      return cached.data as Location[]
+    }
+
+    const response = await carDataApi.get<Location[]>('/location', {
+      params: {
+        session_key,
+        driver_number,
+        'date>': toOpenF1DateStr(new Date(dateStart.getTime() - 500)),
+        'date<': toOpenF1DateStr(dateEnd),
+      },
+    })
+
+    const data = response.data ?? []
+    cache.set(cacheKey, { data, timestamp: Date.now() })
+    return data
+  },
 }
 
 export function clearCache() {
