@@ -9,6 +9,8 @@ import { formatLapTime, groupLapsByDriver, getSessionFastestLap, isSlowLap } fro
 import SessionSelector from '../components/common/SessionSelector'
 import { Card, SectionHeader } from '../components/common/StatCard'
 import TrackMap from '../components/charts/TrackMap'
+import TrackMapModal from '../components/charts/TrackMapModal'
+import type { DriverPath } from '../components/charts/TrackMap'
 import { Activity, Zap, Gauge, AlertCircle, Plus, X, CheckCircle2 } from 'lucide-react'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -278,6 +280,7 @@ export default function Telemetry() {
 
   // Track map hover state
   const [hoverTime, setHoverTime] = useState<number | null>(null)
+  const [mapModalOpen, setMapModalOpen] = useState(false)
 
   const lapsByDriver = useMemo(() => groupLapsByDriver(laps), [laps])
   const sessionFastest = useMemo(() => getSessionFastestLap(laps), [laps])
@@ -411,6 +414,18 @@ export default function Telemetry() {
   // ── Track map: all location points for outline + current positions ────────────
   const allLocations = useMemo(() =>
     results.flatMap(r => r.locationData),
+    [results]
+  )
+
+  const trackPaths = useMemo<DriverPath[]>(() =>
+    results
+      .filter(r => r.locationData.length > 0)
+      .map(r => ({
+        id: r.id,
+        color: SLOT_COLORS[r.id % SLOT_COLORS.length],
+        label: r.label.split(' ')[0],
+        locations: r.locationData,
+      })),
     [results]
   )
 
@@ -586,8 +601,10 @@ export default function Telemetry() {
               <TrackMap
                 allLocations={allLocations}
                 currentDots={currentDots}
+                paths={trackPaths}
                 width={296}
                 height={220}
+                onExpand={() => setMapModalOpen(true)}
               />
               {hoverTime != null ? (
                 <p className="text-xs text-f1-muted px-1">
@@ -597,7 +614,17 @@ export default function Telemetry() {
                   )}
                 </p>
               ) : (
-                <p className="text-xs text-f1-muted px-1">悬停任意图表查看赛道位置</p>
+                <p className="text-xs text-f1-muted px-1">
+                  悬停任意图表查看位置
+                  {allLocations.length > 0 && (
+                    <button
+                      onClick={() => setMapModalOpen(true)}
+                      className="ml-2 text-green-400 hover:text-green-300 underline underline-offset-2 transition-colors"
+                    >
+                      展开地图
+                    </button>
+                  )}
+                </p>
               )}
               {allLocations.length === 0 && results.length > 0 && (
                 <p className="text-xs text-amber-400 px-1">
@@ -636,6 +663,15 @@ export default function Telemetry() {
           <p className="text-white font-medium mb-1">选择赛事会话开始遥测对比</p>
           <p className="text-f1-muted text-sm">最多 4 条轨迹叠加 · 跨圈次自由对比 · 悬停查看赛道位置</p>
         </div>
+      )}
+
+      {/* Full-screen track map modal */}
+      {mapModalOpen && hasResults && (
+        <TrackMapModal
+          results={results}
+          mergedData={mergedData}
+          onClose={() => setMapModalOpen(false)}
+        />
       )}
     </div>
   )
