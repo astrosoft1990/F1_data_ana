@@ -198,13 +198,17 @@ function TelTooltip({
   )
 }
 
+// Shared syncId so Recharts synchronises hover across all telemetry charts
+const SYNC_ID = 'telemetry-sync'
+
 function TelChart({
   title, subtitle, channel, unit, domain, results, mergedData, step, onTimeHover,
 }: {
   title: string; subtitle: string; channel: string; unit: string
   domain?: [number | 'auto', number | 'auto']
   results: SlotResult[]; mergedData: Array<Record<string, number | null>>
-  step?: 'stepAfter' | 'monotone'; onTimeHover?: (t: number | null) => void
+  step?: 'stepAfter' | 'monotone'
+  onTimeHover?: (t: number | null) => void
 }) {
   const tooltipContent = useCallback(
     (props: { active?: boolean; payload?: Array<{ value: number; dataKey: string; color: string }>; label?: number }) =>
@@ -220,13 +224,17 @@ function TelChart({
           <LineChart
             data={mergedData}
             margin={{ top: 5, right: 15, left: 5, bottom: 5 }}
+            syncId={SYNC_ID}
             onMouseMove={e => onTimeHover?.(e?.activeLabel as number ?? null)}
             onMouseLeave={() => onTimeHover?.(null)}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#383850" />
             <XAxis dataKey="time" stroke="#8888aa" tick={{ fontSize: 10 }} unit="s" />
             <YAxis stroke="#8888aa" tick={{ fontSize: 10 }} domain={domain ?? ['auto', 'auto']} unit={unit} width={42} />
-            <Tooltip content={tooltipContent as any} />
+            <Tooltip
+              content={tooltipContent as any}
+              cursor={{ stroke: 'rgba(255,255,255,0.25)', strokeWidth: 1, strokeDasharray: '4 3' }}
+            />
             <Legend
               wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
               formatter={(value: string) => {
@@ -566,7 +574,7 @@ export default function Telemetry() {
           {/* Speed chart + Track map side by side */}
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4 items-start">
             <TelChart
-              title="速度曲线" subtitle="km/h · 横轴为圈内时间（秒）— 悬停查看赛道位置"
+              title="速度曲线" subtitle="km/h · 横轴为圈内时间（秒）"
               channel="speed" unit=" km/h" domain={[0, 380]}
               results={results} mergedData={mergedData}
               onTimeHover={setHoverTime}
@@ -574,7 +582,7 @@ export default function Telemetry() {
 
             {/* Track map */}
             <div className="flex flex-col gap-2">
-              <div className="text-sm font-semibold text-white px-1">赛道位置</div>
+              <div className="text-sm font-semibold text-white px-1">赛道实时位置</div>
               <TrackMap
                 allLocations={allLocations}
                 currentDots={currentDots}
@@ -585,11 +593,11 @@ export default function Telemetry() {
                 <p className="text-xs text-f1-muted px-1">
                   圈内时间: <span className="font-mono text-white">{hoverTime.toFixed(1)}s</span>
                   {currentDots.length === 0 && allLocations.length > 0 && (
-                    <span className="ml-2 text-amber-400">（该时刻超出圈次范围）</span>
+                    <span className="ml-2 text-amber-400">（超出圈次范围）</span>
                   )}
                 </p>
               ) : (
-                <p className="text-xs text-f1-muted px-1">将鼠标移入速度图查看位置</p>
+                <p className="text-xs text-f1-muted px-1">悬停任意图表查看赛道位置</p>
               )}
               {allLocations.length === 0 && results.length > 0 && (
                 <p className="text-xs text-amber-400 px-1">
@@ -603,16 +611,20 @@ export default function Telemetry() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <TelChart title="油门开度" subtitle="0–100%"
               channel="throttle" unit="%" domain={[0, 100]}
-              results={results} mergedData={mergedData} />
+              results={results} mergedData={mergedData}
+              onTimeHover={setHoverTime} />
             <TelChart title="刹车状态" subtitle="踩下=100%"
               channel="brake" unit="%" domain={[0, 100]}
-              results={results} mergedData={mergedData} />
+              results={results} mergedData={mergedData}
+              onTimeHover={setHoverTime} />
             <TelChart title="档位" subtitle="1–8 档"
               channel="gear" unit="" domain={[0, 9]}
-              results={results} mergedData={mergedData} step="stepAfter" />
+              results={results} mergedData={mergedData} step="stepAfter"
+              onTimeHover={setHoverTime} />
             <TelChart title="发动机转速 (RPM)" subtitle=""
               channel="rpm" unit="" domain={[0, 16000]}
-              results={results} mergedData={mergedData} />
+              results={results} mergedData={mergedData}
+              onTimeHover={setHoverTime} />
           </div>
         </div>
       )}
