@@ -63,6 +63,40 @@ export function findFastestLap(laps: Lap[]): Lap | null {
   )
 }
 
+/**
+ * Returns the single fastest clean lap time across ALL drivers in the session.
+ * Used as the reference for the 1.2× outlier threshold.
+ */
+export function getSessionFastestLap(laps: Lap[]): number | null {
+  const times = laps
+    .filter(l => l.lap_duration != null && l.lap_duration > 0 && !l.is_pit_out_lap)
+    .map(l => l.lap_duration!)
+  return times.length > 0 ? Math.min(...times) : null
+}
+
+/**
+ * A lap is "valid" for analysis if it:
+ *  1. Has a non-null, positive duration
+ *  2. Is not a pit-out lap
+ *  3. Is within `threshold` × session fastest (default 1.2×)
+ *
+ * Pass `sessionFastest = null` to skip the threshold check.
+ */
+export function isValidLap(lap: Lap, sessionFastest: number | null, threshold = 1.2): boolean {
+  if (lap.lap_duration == null || lap.lap_duration <= 0) return false
+  if (lap.is_pit_out_lap) return false
+  if (sessionFastest != null && lap.lap_duration > sessionFastest * threshold) return false
+  return true
+}
+
+/** Returns true when a lap should be flagged as an outlier (slow) but NOT a pit-out lap. */
+export function isSlowLap(lap: Lap, sessionFastest: number | null, threshold = 1.2): boolean {
+  if (lap.is_pit_out_lap) return false
+  if (lap.lap_duration == null || lap.lap_duration <= 0) return false
+  if (sessionFastest == null) return false
+  return lap.lap_duration > sessionFastest * threshold
+}
+
 export function groupLapsByDriver(laps: Lap[]): Map<number, Lap[]> {
   const map = new Map<number, Lap[]>()
   for (const lap of laps) {

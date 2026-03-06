@@ -8,6 +8,7 @@ import { openF1Api } from '../api/openf1'
 import type { Session, Driver, Lap } from '../types/f1'
 import {
   formatLapTime, getDriverColor, groupLapsByDriver, findFastestLap,
+  getSessionFastestLap, isValidLap,
 } from '../utils/f1'
 import SessionSelector from '../components/common/SessionSelector'
 import DriverSelector from '../components/common/DriverSelector'
@@ -43,8 +44,13 @@ export default function DriverComparison() {
   }, [])
 
   const lapsByDriver = groupLapsByDriver(laps)
+  const sessionFastest = getSessionFastestLap(laps)
 
-  // Sector comparison (fastest individual sectors)
+  // Helper: valid laps for a driver (no pit-out, not >1.2× session fastest)
+  const validDriverLaps = (driverNum: number) =>
+    (lapsByDriver.get(driverNum) || []).filter(l => isValidLap(l, sessionFastest))
+
+  // Sector comparison (fastest individual sectors, valid laps only)
   const sectorData = (() => {
     const sectors = []
     for (const label of ['S1', 'S2', 'S3']) {
@@ -52,19 +58,18 @@ export default function DriverComparison() {
       for (const driverNum of selectedDrivers) {
         const driver = drivers.find(d => d.driver_number === driverNum)
         if (!driver) continue
-        const driverLaps = lapsByDriver.get(driverNum) || []
         const key = label === 'S1' ? 'duration_sector_1' : label === 'S2' ? 'duration_sector_2' : 'duration_sector_3'
-        const valid = driverLaps.map(l => l[key as keyof Lap] as number | null).filter(v => v != null && v > 0) as number[]
-        if (valid.length > 0) {
-          row[driver.name_acronym] = Math.min(...valid)
-        }
+        const valid = validDriverLaps(driverNum)
+          .map(l => l[key as keyof Lap] as number | null)
+          .filter(v => v != null && v > 0) as number[]
+        if (valid.length > 0) row[driver.name_acronym] = Math.min(...valid)
       }
       sectors.push(row)
     }
     return sectors
   })()
 
-  // Speed trap data
+  // Speed trap data (valid laps only)
   const speedData = (() => {
     const traps = ['i1_speed', 'i2_speed', 'st_speed']
     const labels = ['中间计时1', '中间计时2', '终点速度陷阱']
@@ -73,15 +78,16 @@ export default function DriverComparison() {
       for (const driverNum of selectedDrivers) {
         const driver = drivers.find(d => d.driver_number === driverNum)
         if (!driver) continue
-        const driverLaps = lapsByDriver.get(driverNum) || []
-        const vals = driverLaps.map(l => l[trap as keyof Lap] as number | null).filter(v => v != null && v > 0) as number[]
+        const vals = validDriverLaps(driverNum)
+          .map(l => l[trap as keyof Lap] as number | null)
+          .filter(v => v != null && v > 0) as number[]
         if (vals.length > 0) row[driver.name_acronym] = Math.max(...vals)
       }
       return row
     })
   })()
 
-  // Lap time comparison chart
+  // Lap time comparison chart (valid laps only)
   const maxLaps = Math.max(...Array.from(lapsByDriver.values()).map(ls => ls.length), 0)
   const lapCompareData = Array.from({ length: maxLaps }, (_, i) => {
     const lapNum = i + 1
@@ -90,23 +96,23 @@ export default function DriverComparison() {
       const driver = drivers.find(d => d.driver_number === driverNum)
       if (!driver) continue
       const lap = lapsByDriver.get(driverNum)?.find(l => l.lap_number === lapNum)
-      if (lap?.lap_duration && !lap.is_pit_out_lap) {
-        row[driver.name_acronym] = lap.lap_duration
+      if (lap && isValidLap(lap, sessionFastest)) {
+        row[driver.name_acronym] = lap.lap_duration!
       }
     }
     return row
   })
 
-  // Radar chart (normalized performance)
+  // Radar chart (valid laps only)
   const radarData = (() => {
     if (selectedDrivers.length === 0) return []
-    const allFastest = laps.filter(l => l.lap_duration && !l.is_pit_out_lap)
-    const globalFastest = allFastest.reduce((m, l) => Math.min(m, l.lap_duration!), Infinity)
-    const globalS1 = allFastest.reduce((m, l) => l.duration_sector_1 ? Math.min(m, l.duration_sector_1) : m, Infinity)
-    const globalS2 = allFastest.reduce((m, l) => l.duration_sector_2 ? Math.min(m, l.duration_sector_2) : m, Infinity)
-    const globalS3 = allFastest.reduce((m, l) => l.duration_sector_3 ? Math.min(m, l.duration_sector_3) : m, Infinity)
-    const globalI1 = allFastest.reduce((m, l) => l.i1_speed ? Math.max(m, l.i1_speed) : m, 0)
-    const globalI2 = allFastest.reduce((m, l) => l.i2_speed ? Math.max(m, l.i2_speed) : m, 0)
+    const allValid = laps.filter(l => isValidLap(l, sessionFastest))
+    const globalFastest = allValid.reduce((m, l) => Math.min(m, l.lap_duration!), Infinity)
+    const globalS1 = allValid.reduce((m, l) => l.duration_sector_1 ? Math.min(m, l.duration_sector_1) : m, Infinity)
+    const globalS2 = allValid.reduce((m, l) => l.duration_sector_2 ? Math.min(m, l.duration_sector_2) : m, Infinity)
+    const globalS3 = allValid.reduce((m, l) => l.duration_sector_3 ? Math.min(m, l.duration_sector_3) : m, Infinity)
+    const globalI1 = allValid.reduce((m, l) => l.i1_speed ? Math.max(m, l.i1_speed) : m, 0)
+    const globalI2 = allValid.reduce((m, l) => l.i2_speed ? Math.max(m, l.i2_speed) : m, 0)
 
     const dims = ['最快圈速', '扇区1', '扇区2', '扇区3', '直线速度1', '直线速度2']
     return dims.map((dim, di) => {
@@ -114,25 +120,25 @@ export default function DriverComparison() {
       for (const driverNum of selectedDrivers) {
         const driver = drivers.find(d => d.driver_number === driverNum)
         if (!driver) continue
-        const driverLaps = lapsByDriver.get(driverNum) || []
+        const dLaps = validDriverLaps(driverNum)
         let score = 0
         if (di === 0) {
-          const f = findFastestLap(driverLaps)
+          const f = findFastestLap(dLaps)
           score = f?.lap_duration ? (globalFastest / f.lap_duration) * 100 : 0
         } else if (di === 1) {
-          const best = Math.min(...driverLaps.map(l => l.duration_sector_1 || Infinity))
+          const best = Math.min(...dLaps.map(l => l.duration_sector_1 || Infinity))
           score = best !== Infinity ? (globalS1 / best) * 100 : 0
         } else if (di === 2) {
-          const best = Math.min(...driverLaps.map(l => l.duration_sector_2 || Infinity))
+          const best = Math.min(...dLaps.map(l => l.duration_sector_2 || Infinity))
           score = best !== Infinity ? (globalS2 / best) * 100 : 0
         } else if (di === 3) {
-          const best = Math.min(...driverLaps.map(l => l.duration_sector_3 || Infinity))
+          const best = Math.min(...dLaps.map(l => l.duration_sector_3 || Infinity))
           score = best !== Infinity ? (globalS3 / best) * 100 : 0
         } else if (di === 4) {
-          const best = Math.max(...driverLaps.map(l => l.i1_speed || 0))
+          const best = Math.max(...dLaps.map(l => l.i1_speed || 0))
           score = globalI1 > 0 ? (best / globalI1) * 100 : 0
         } else {
-          const best = Math.max(...driverLaps.map(l => l.i2_speed || 0))
+          const best = Math.max(...dLaps.map(l => l.i2_speed || 0))
           score = globalI2 > 0 ? (best / globalI2) * 100 : 0
         }
         row[driver.name_acronym] = Math.round(score * 10) / 10
@@ -173,7 +179,7 @@ export default function DriverComparison() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {selectedDrivers.map((driverNum, i) => {
               const driver = drivers.find(d => d.driver_number === driverNum)
-              const driverLaps = lapsByDriver.get(driverNum) || []
+              const driverLaps = validDriverLaps(driverNum)
               const fastest = findFastestLap(driverLaps)
               if (!driver) return null
               const color = getDriverColor(driver, i)
@@ -196,7 +202,7 @@ export default function DriverComparison() {
                     </div>
                     <div>
                       <p className="text-xs text-f1-muted">有效圈数</p>
-                      <p className="text-white font-bold text-sm">{driverLaps.filter(l => l.lap_duration != null).length}</p>
+                      <p className="text-white font-bold text-sm">{driverLaps.length}</p>
                     </div>
                     <div>
                       <p className="text-xs text-f1-muted">最佳S1</p>

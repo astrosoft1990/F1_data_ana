@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import { openF1Api } from '../api/openf1'
 import type { Session, Driver, Lap, CarData, Location } from '../types/f1'
-import { formatLapTime, groupLapsByDriver } from '../utils/f1'
+import { formatLapTime, groupLapsByDriver, getSessionFastestLap, isSlowLap } from '../utils/f1'
 import SessionSelector from '../components/common/SessionSelector'
 import { Card, SectionHeader } from '../components/common/StatCard'
 import TrackMap from '../components/charts/TrackMap'
@@ -100,12 +100,13 @@ function nearestLocation(locations: Location[], targetMs: number): Location | nu
 
 function SlotCard({
   slot, index, drivers, lapsByDriver, color,
-  loaded, loading: slotLoading, error,
+  loaded, loading: slotLoading, error, sessionFastest,
   onChange, onRemove,
 }: {
   slot: Slot; index: number; drivers: Driver[]
   lapsByDriver: Map<number, Lap[]>; color: string
   loaded: boolean; loading: boolean; error: string | null
+  sessionFastest: number | null
   onChange: (id: number, field: 'driverNum' | 'lapNum', value: number | null) => void
   onRemove: (id: number) => void
 }) {
@@ -154,12 +155,15 @@ function SlotCard({
           className="bg-f1-dark border border-f1-border text-white rounded-lg px-2 py-1.5 text-xs w-full focus:outline-none disabled:opacity-40"
         >
           <option value="">— 选择圈次 —</option>
-          {driverLaps.map(l => (
-            <option key={l.lap_number} value={l.lap_number}>
-              第 {l.lap_number} 圈 — {formatLapTime(l.lap_duration)}
-              {l.is_pit_out_lap ? ' [出站]' : ''}
-            </option>
-          ))}
+          {driverLaps.map(l => {
+            const slow = isSlowLap(l, sessionFastest)
+            return (
+              <option key={l.lap_number} value={l.lap_number}>
+                第 {l.lap_number} 圈 — {formatLapTime(l.lap_duration)}
+                {l.is_pit_out_lap ? ' [出站圈]' : slow ? ' ⚠ 慢圈' : ''}
+              </option>
+            )
+          })}
         </select>
       </div>
     </div>
@@ -268,6 +272,7 @@ export default function Telemetry() {
   const [hoverTime, setHoverTime] = useState<number | null>(null)
 
   const lapsByDriver = useMemo(() => groupLapsByDriver(laps), [laps])
+  const sessionFastest = useMemo(() => getSessionFastestLap(laps), [laps])
 
   // ── Session load ────────────────────────────────────────────────────────────
   const loadSession = useCallback(async (s: Session) => {
@@ -474,6 +479,7 @@ export default function Telemetry() {
                 loaded={results.some(r => r.id === slot.id)}
                 loading={slotLoading.has(slot.id)}
                 error={slotErrors.get(slot.id) ?? null}
+                sessionFastest={sessionFastest}
                 onChange={handleSlotChange} onRemove={removeSlot}
               />
             ))}

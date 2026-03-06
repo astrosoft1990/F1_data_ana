@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import { openF1Api } from '../api/openf1'
 import type { Session, Driver, Lap, Position, Pit, Stint, Weather } from '../types/f1'
-import { formatLapTime, getDriverColor, getTireColor, getTireLetter, groupLapsByDriver } from '../utils/f1'
+import { formatLapTime, getDriverColor, getTireColor, getTireLetter, groupLapsByDriver, getSessionFastestLap, isValidLap } from '../utils/f1'
 import SessionSelector from '../components/common/SessionSelector'
 import DriverSelector from '../components/common/DriverSelector'
 import { LoadingCard, ErrorCard } from '../components/common/LoadingSpinner'
@@ -96,6 +96,9 @@ export default function RaceAnalysis() {
   const lapsByDriver = useMemo(() => groupLapsByDriver(laps), [laps])
   const maxLaps = useMemo(() => Math.max(...Array.from(lapsByDriver.values()).map(ls => ls.length), 0), [lapsByDriver])
 
+  // Session-wide fastest clean lap – used as the 1.2× outlier threshold
+  const sessionFastest = useMemo(() => getSessionFastestLap(laps), [laps])
+
   // ── Lap chart data ──────────────────────────────────────────────────────────
   const lapChartData = useMemo(() => Array.from({ length: maxLaps }, (_, i) => {
     const lap = i + 1
@@ -103,12 +106,12 @@ export default function RaceAnalysis() {
     for (const driverNum of selectedDrivers) {
       const driver = drivers.find(d => d.driver_number === driverNum)
       const driverLap = lapsByDriver.get(driverNum)?.find(l => l.lap_number === lap)
-      if (driver && driverLap?.lap_duration && !driverLap.is_pit_out_lap) {
-        point[driver.name_acronym] = driverLap.lap_duration
+      if (driver && driverLap && isValidLap(driverLap, sessionFastest)) {
+        point[driver.name_acronym] = driverLap.lap_duration!
       }
     }
     return point
-  }), [maxLaps, selectedDrivers, drivers, lapsByDriver])
+  }), [maxLaps, selectedDrivers, drivers, lapsByDriver, sessionFastest])
 
   // ── Position chart using real API data ──────────────────────────────────────
   const positionChartData = useMemo(() =>
@@ -116,11 +119,11 @@ export default function RaceAnalysis() {
     [positions, laps, selectedDrivers, drivers]
   )
 
-  // ── Box plot stats (all drivers, no pit-out laps) ────────────────────────────
+  // ── Box plot stats (all drivers, valid laps only: no pit-out, no >1.2× fastest) ─
   const boxStats = useMemo(() => {
     return drivers.map((driver, i) => {
       const validLaps = (lapsByDriver.get(driver.driver_number) || [])
-        .filter(l => l.lap_duration != null && !l.is_pit_out_lap && l.lap_duration! > 0)
+        .filter(l => isValidLap(l, sessionFastest))
         .map(l => l.lap_duration!)
       if (validLaps.length < 2) return null
       return computeBoxStats(
@@ -130,7 +133,7 @@ export default function RaceAnalysis() {
         validLaps,
       )
     }).filter(Boolean) as ReturnType<typeof computeBoxStats>[]
-  }, [drivers, lapsByDriver])
+  }, [drivers, lapsByDriver, sessionFastest])
 
   const filteredPits = pits.filter(p => selectedDrivers.includes(p.driver_number))
   const weatherSampled = weather.filter((_, i) => i % Math.max(1, Math.floor(weather.length / 60)) === 0)
@@ -188,7 +191,7 @@ export default function RaceAnalysis() {
             <Card className="p-5">
               <SectionHeader
                 title="逐圈圈速"
-                subtitle={`${session.meeting_name} · ${session.session_name} · 已过滤进站圈`}
+                subtitle={`${session.meeting_name} · ${session.session_name} · 已过滤进站圈及 >1.2× 最快圈`}
               />
               <div className="h-80">
                 <ResponsiveContainer>
@@ -227,7 +230,7 @@ export default function RaceAnalysis() {
                     {selectedDrivers.map((driverNum, i) => {
                       const driver = drivers.find(d => d.driver_number === driverNum)
                       const driverLaps = lapsByDriver.get(driverNum) || []
-                      const valid = driverLaps.filter(l => l.lap_duration != null && !l.is_pit_out_lap)
+                      const valid = driverLaps.filter(l => isValidLap(l, sessionFastest))
                       const fastest = valid.reduce<Lap | null>((f, l) =>
                         !f || l.lap_duration! < f.lap_duration! ? l : f, null)
                       if (!driver || !fastest) return null
@@ -259,7 +262,7 @@ export default function RaceAnalysis() {
             <Card className="p-5">
               <SectionHeader
                 title="圈速分布箱线图"
-                subtitle="全场车手 · 已剔除进站圈 · ◆ 均值  — 中位数  ○ 异常值"
+                subtitle="全场车手 · 已剔除进站圈及 >1.2× 最快圈 · ◆ 均值  — 中位数  ○ 异常值"
                 actions={
                   <div className="flex items-center gap-1 text-xs text-f1-muted">
                     <BarChart2 className="w-4 h-4" />
