@@ -206,9 +206,12 @@ function LargeTrackSvg({ allLocations, driverPaths, currentDots }: LargeTrackSvg
   // ── Zoom level presets ────────────────────────────────────────────────────
   const presets = [1, 2, 4, 8]
 
-  // ── Stroke width scales with zoom for consistent visual weight ───────────
-  const pathStroke = Math.max(1.5, 4 / Math.sqrt(zoom))
-  const dotRadius = Math.max(4, 7 / Math.sqrt(zoom))
+  // ── Size helpers: r = C/zoom keeps visual screen size CONSTANT as zoom changes.
+  // With viewBox width = 1000/zoom, 1 SVG unit = (screenPx * zoom / 1000) pixels,
+  // so r = C/zoom → visual radius = C * screenPx / 1000 = constant. ──────────
+  const R = 5 / zoom        // position dot radius (~5 screen-px)
+  const FONT = 12 / zoom    // label font size (~12 screen-px)
+  const START_R = 3.5 / zoom  // start marker radius
 
   return (
     <div
@@ -229,57 +232,57 @@ function LargeTrackSvg({ allLocations, driverPaths, currentDots }: LargeTrackSvg
         onTouchMove={handleTouchMove}
         onTouchEnd={stopDrag}
       >
-        {/* Track base layers */}
+        {/* Track base layers – scale with zoom (road widens naturally as you zoom in) */}
         {outlinePath && <>
-          <path d={outlinePath} fill="none" stroke="#1a1a2e" strokeWidth={32} strokeLinecap="round" strokeLinejoin="round" />
-          <path d={outlinePath} fill="none" stroke="#242436" strokeWidth={22} strokeLinecap="round" strokeLinejoin="round" />
-          <path d={outlinePath} fill="none" stroke="#3a3a52" strokeWidth={14} strokeLinecap="round" strokeLinejoin="round" />
-          <path d={outlinePath} fill="none" stroke="#52526a" strokeWidth={8} strokeLinecap="round" strokeLinejoin="round" />
-          {/* Center line */}
-          <path d={outlinePath} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={2}
-            strokeLinecap="round" strokeLinejoin="round" strokeDasharray="8 12" />
+          <path d={outlinePath} fill="none" stroke="#1a1a2e" strokeWidth={22} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={outlinePath} fill="none" stroke="#2a2a40" strokeWidth={15} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={outlinePath} fill="none" stroke="#3e3e58" strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={outlinePath} fill="none" stroke="#56566e" strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
+          {/* Center dashes: non-scaling so they stay sharp thin at all zoom levels */}
+          <path d={outlinePath} fill="none" stroke="rgba(255,255,255,0.08)"
+            strokeWidth={0.6} strokeLinecap="round" strokeLinejoin="round"
+            strokeDasharray="6 10"
+            vectorEffect="non-scaling-stroke"
+          />
         </>}
 
-        {/* Driver lap paths – drawn in order, with slight Y offset to separate overlapping lines */}
-        {svgPaths.map((p) => {
-          // Apply a tiny perpendicular nudge so overlapping lines separate at corners
-          // We achieve this with a filter/transform that's imperceptible at zoom=1 but visible at zoom>2
-          return p.d ? (
-            <path
-              key={p.id}
-              d={p.d}
-              fill="none"
-              stroke={p.color}
-              strokeWidth={pathStroke}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity={followId !== null && followId !== p.id ? 0.35 : 0.9}
-            />
-          ) : null
-        })}
+        {/* Driver paths – non-scaling-stroke: always 1.5 px regardless of zoom */}
+        {svgPaths.map(p => p.d ? (
+          <path
+            key={p.id}
+            d={p.d}
+            fill="none"
+            stroke={p.color}
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+            opacity={followId !== null && followId !== p.id ? 0.3 : 0.95}
+          />
+        ) : null)}
 
-        {/* Start markers per driver */}
+        {/* Start markers – constant visual size */}
         {svgPaths.map(p => {
           if (!p.locations[0]) return null
           const { sx, sy } = toSvg({ x: p.locations[0].x, y: p.locations[0].y })
           return (
             <g key={`start-${p.id}`}>
-              <circle cx={sx} cy={sy} r={dotRadius * 1.5} fill={p.color} opacity={0.3} />
-              <circle cx={sx} cy={sy} r={dotRadius * 0.8} fill={p.color} />
+              <circle cx={sx} cy={sy} r={START_R * 2.2} fill={p.color} opacity={0.25} />
+              <circle cx={sx} cy={sy} r={START_R} fill={p.color} />
             </g>
           )
         })}
 
-        {/* Position dots with glow */}
+        {/* Position dots – constant visual size via r = C/zoom */}
         {svgDots.map(dot => (
           <g key={dot.slotId}>
-            <circle cx={dot.sx} cy={dot.sy} r={dotRadius * 3} fill={dot.color} opacity={0.12} />
-            <circle cx={dot.sx} cy={dot.sy} r={dotRadius * 1.8} fill={dot.color} opacity={0.3} />
-            <circle cx={dot.sx} cy={dot.sy} r={dotRadius} fill={dot.color} stroke="#0a0a14" strokeWidth={2} />
+            <circle cx={dot.sx} cy={dot.sy} r={R * 3.5} fill={dot.color} opacity={0.12} />
+            <circle cx={dot.sx} cy={dot.sy} r={R * 2}   fill={dot.color} opacity={0.28} />
+            <circle cx={dot.sx} cy={dot.sy} r={R}       fill={dot.color} stroke="#0a0a14" strokeWidth={1} vectorEffect="non-scaling-stroke" />
             <text
-              x={dot.sx} y={dot.sy - dotRadius * 1.8}
+              x={dot.sx} y={dot.sy - R * 2.2}
               textAnchor="middle"
-              fontSize={dotRadius * 2.2}
+              fontSize={FONT}
               fontWeight="800"
               fill={dot.color}
               style={{ filter: 'drop-shadow(0 0 3px rgba(0,0,0,1))' }}
