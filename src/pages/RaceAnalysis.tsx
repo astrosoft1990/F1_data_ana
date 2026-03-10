@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import type { Lap } from '../types/f1'
 import { useSearchParams } from 'react-router-dom'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, BarChart, Bar, Cell
 } from 'recharts'
 import { openF1Api } from '../api/openf1'
-import type { Session, Driver, Lap, Position, Pit, Stint, Weather } from '../types/f1'
+import type { Session, Driver, Position, Pit, Stint, Weather } from '../types/f1'
 import { formatLapTime, getDriverColor, getTireColor, getTireLetter, groupLapsByDriver, getSessionFastestLap, isValidLap } from '../utils/f1'
 import SessionSelector from '../components/common/SessionSelector'
 import DriverSelector from '../components/common/DriverSelector'
@@ -54,6 +55,9 @@ export default function RaceAnalysis() {
   const [activeTab, setActiveTab] = useState('laps')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Manual lap time range filter (seconds)
+  const [filterMin, setFilterMin] = useState<string>('')
+  const [filterMax, setFilterMax] = useState<string>('')
 
   const loadSession = useCallback(async (s: Session) => {
     setSession(s)
@@ -99,6 +103,18 @@ export default function RaceAnalysis() {
   // Session-wide fastest clean lap – used as the 1.2× outlier threshold
   const sessionFastest = useMemo(() => getSessionFastestLap(laps), [laps])
 
+  // Manual filter bounds (parsed from string inputs)
+  const manualMin = filterMin ? parseFloat(filterMin) : null
+  const manualMax = filterMax ? parseFloat(filterMax) : null
+
+  // Helper: passes both automatic (isValidLap) and manual range filter
+  const passesAllFilters = useCallback((lap: Lap) => {
+    if (!isValidLap(lap, sessionFastest)) return false
+    if (manualMin != null && lap.lap_duration! < manualMin) return false
+    if (manualMax != null && lap.lap_duration! > manualMax) return false
+    return true
+  }, [sessionFastest, manualMin, manualMax])
+
   // ── Lap chart data ──────────────────────────────────────────────────────────
   const lapChartData = useMemo(() => Array.from({ length: maxLaps }, (_, i) => {
     const lap = i + 1
@@ -106,12 +122,12 @@ export default function RaceAnalysis() {
     for (const driverNum of selectedDrivers) {
       const driver = drivers.find(d => d.driver_number === driverNum)
       const driverLap = lapsByDriver.get(driverNum)?.find(l => l.lap_number === lap)
-      if (driver && driverLap && isValidLap(driverLap, sessionFastest)) {
+      if (driver && driverLap && passesAllFilters(driverLap)) {
         point[driver.name_acronym] = driverLap.lap_duration!
       }
     }
     return point
-  }), [maxLaps, selectedDrivers, drivers, lapsByDriver, sessionFastest])
+  }), [maxLaps, selectedDrivers, drivers, lapsByDriver, passesAllFilters])
 
   // ── Position chart using real API data ──────────────────────────────────────
   const positionChartData = useMemo(() =>
@@ -192,6 +208,33 @@ export default function RaceAnalysis() {
               <SectionHeader
                 title="逐圈圈速"
                 subtitle={`${session.meeting_name} · ${session.session_name} · 已过滤进站圈及 >1.2× 最快圈`}
+                actions={
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-f1-muted">圈速范围(秒)</span>
+                    <input
+                      type="number"
+                      value={filterMin}
+                      onChange={e => setFilterMin(e.target.value)}
+                      placeholder={sessionFastest ? sessionFastest.toFixed(1) : '最小'}
+                      className="w-20 bg-f1-gray border border-f1-border text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-f1-red"
+                    />
+                    <span className="text-f1-muted">—</span>
+                    <input
+                      type="number"
+                      value={filterMax}
+                      onChange={e => setFilterMax(e.target.value)}
+                      placeholder={sessionFastest ? (sessionFastest * 1.2).toFixed(1) : '最大'}
+                      className="w-20 bg-f1-gray border border-f1-border text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-f1-red"
+                    />
+                    {(filterMin || filterMax) && (
+                      <button
+                        onClick={() => { setFilterMin(''); setFilterMax('') }}
+                        className="text-f1-muted hover:text-white transition-colors px-1"
+                        title="清除筛选"
+                      >✕ 清除</button>
+                    )}
+                  </div>
+                }
               />
               <div className="h-80">
                 <ResponsiveContainer>
@@ -230,7 +273,7 @@ export default function RaceAnalysis() {
                     {selectedDrivers.map((driverNum, i) => {
                       const driver = drivers.find(d => d.driver_number === driverNum)
                       const driverLaps = lapsByDriver.get(driverNum) || []
-                      const valid = driverLaps.filter(l => isValidLap(l, sessionFastest))
+                      const valid = driverLaps.filter(l => passesAllFilters(l))
                       const fastest = valid.reduce<Lap | null>((f, l) =>
                         !f || l.lap_duration! < f.lap_duration! ? l : f, null)
                       if (!driver || !fastest) return null

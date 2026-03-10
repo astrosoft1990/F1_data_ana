@@ -1,3 +1,5 @@
+import { useState, useMemo } from 'react'
+import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { formatLapTime } from '../../utils/f1'
 
 export interface BoxStats {
@@ -207,24 +209,74 @@ export function BoxPlotChart({ data, colWidth = 60 }: BoxPlotChartProps) {
   )
 }
 
-// ─── Statistics Table ─────────────────────────────────────────────────────────
+// ─── Statistics Table (sortable) ─────────────────────────────────────────────
+
+type SortKey = 'name' | 'count' | 'whiskerMin' | 'mean' | 'median' | 'stdDev' | 'variance' | 'q1' | 'q3' | 'iqr'
+
+const COLUMNS: Array<{ key: SortKey; label: string; title?: string }> = [
+  { key: 'name',       label: '车手' },
+  { key: 'count',      label: '有效圈数' },
+  { key: 'whiskerMin', label: '最快圈',  title: '去掉异常值后的最小值' },
+  { key: 'mean',       label: '均值' },
+  { key: 'median',     label: '中位数' },
+  { key: 'stdDev',     label: '标准差',  title: '标准差越小代表圈速越稳定' },
+  { key: 'variance',   label: '方差' },
+  { key: 'q1',         label: 'Q1 (25%)' },
+  { key: 'q3',         label: 'Q3 (75%)' },
+  { key: 'iqr',        label: 'IQR',     title: 'Q3 − Q1，衡量分布范围' },
+]
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: 1 | -1 }) {
+  if (col !== sortKey) return <ChevronsUpDown className="w-3 h-3 opacity-30 inline ml-0.5" />
+  return sortDir === 1
+    ? <ChevronUp className="w-3 h-3 text-f1-red inline ml-0.5" />
+    : <ChevronDown className="w-3 h-3 text-f1-red inline ml-0.5" />
+}
 
 export function BoxStatsTable({ data }: { data: BoxStats[] }) {
+  const [sortKey, setSortKey] = useState<SortKey>('median')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(d => d === 1 ? -1 : 1)
+    else { setSortKey(key); setSortDir(1) }
+  }
+
   const fastest = Math.min(...data.map(d => d.median))
+
+  const sorted = useMemo(() => {
+    return [...data].sort((a, b) => {
+      let av: number | string, bv: number | string
+      if (sortKey === 'name')     { av = a.name; bv = b.name }
+      else if (sortKey === 'iqr') { av = a.q3 - a.q1; bv = b.q3 - b.q1 }
+      else                        { av = a[sortKey] as number; bv = b[sortKey] as number }
+      if (typeof av === 'string') return av.localeCompare(bv as string) * sortDir
+      return ((av as number) - (bv as number)) * sortDir
+    })
+  }, [data, sortKey, sortDir])
 
   return (
     <div className="overflow-x-auto mt-4">
-      <table className="w-full text-xs min-w-[640px]">
+      <table className="w-full text-xs min-w-[700px]">
         <thead>
           <tr className="border-b border-f1-border">
-            {['车手', '有效圈数', '最快圈', '均值', '中位数', '标准差', '方差', 'Q1', 'Q3', 'IQR'].map(h => (
-              <th key={h} className="text-left text-f1-muted font-medium py-2 pr-3">{h}</th>
+            {COLUMNS.map(col => (
+              <th
+                key={col.key}
+                title={col.title}
+                onClick={() => handleSort(col.key)}
+                className="text-left text-f1-muted font-medium py-2 pr-3 cursor-pointer select-none hover:text-white transition-colors whitespace-nowrap"
+              >
+                {col.label}
+                <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {[...data].sort((a, b) => a.median - b.median).map(d => {
+          {sorted.map(d => {
             const gapToFastest = d.median - fastest
+            const iqr = d.q3 - d.q1
             return (
               <tr key={d.name} className="border-b border-f1-border/40 hover:bg-f1-gray/30">
                 <td className="py-2 pr-3">
@@ -246,7 +298,7 @@ export function BoxStatsTable({ data }: { data: BoxStats[] }) {
                 <td className="py-2 pr-3 font-mono text-f1-muted">{d.variance.toFixed(4)}</td>
                 <td className="py-2 pr-3 font-mono text-f1-muted">{formatLapTime(d.q1)}</td>
                 <td className="py-2 pr-3 font-mono text-f1-muted">{formatLapTime(d.q3)}</td>
-                <td className="py-2 font-mono text-f1-muted">{(d.q3 - d.q1).toFixed(3)}s</td>
+                <td className="py-2 font-mono text-f1-muted">{iqr.toFixed(3)}s</td>
               </tr>
             )
           })}

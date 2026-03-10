@@ -1,11 +1,14 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell
+  ResponsiveContainer, Cell, ReferenceLine, Legend,
 } from 'recharts'
 import { openF1Api } from '../api/openf1'
-import type { Session, Driver, Stint, Pit } from '../types/f1'
-import { getDriverColor, getTireColor, getTireLetter } from '../utils/f1'
+import type { Session, Driver, Lap, Stint, Pit } from '../types/f1'
+import {
+  getDriverColor, getTireColor, getTireLetter,
+  getSessionFastestLap, isValidLap, formatLapTime,
+} from '../utils/f1'
 import SessionSelector from '../components/common/SessionSelector'
 import { LoadingCard, ErrorCard } from '../components/common/LoadingSpinner'
 import { Card, SectionHeader } from '../components/common/StatCard'
@@ -23,6 +26,7 @@ const COMPOUND_NAMES: Record<string, string> = {
 export default function TireStrategy() {
   const [session, setSession] = useState<Session | null>(null)
   const [drivers, setDrivers] = useState<Driver[]>([])
+  const [laps, setLaps] = useState<Lap[]>([])
   const [stints, setStints] = useState<Stint[]>([])
   const [pits, setPits] = useState<Pit[]>([])
   const [maxLapsFromData, setMaxLapsFromData] = useState(0)
@@ -41,6 +45,7 @@ export default function TireStrategy() {
         openF1Api.getPitStops(s.session_key),
       ])
       setDrivers(driverList)
+      setLaps(lapData)
       const maxLapFromData = Math.max(...lapData.map(l => l.lap_number), 1)
       setMaxLapsFromData(maxLapFromData)
       setStints(stintData)
@@ -53,6 +58,7 @@ export default function TireStrategy() {
   }, [])
 
   const maxLaps = Math.max(...stints.map(s => s.lap_end || 0), maxLapsFromData, 1)
+  const sessionFastest = useMemo(() => getSessionFastestLap(laps), [laps])
 
   // Group stints by driver
   const driverStints = new Map<number, Stint[]>()
@@ -94,6 +100,79 @@ export default function TireStrategy() {
     const bDriver = drivers.find(d => d.driver_number === b)
     return (aDriver?.name_acronym || '').localeCompare(bDriver?.name_acronym || '')
   })
+
+  // ── Per-compound lap time analysis ────────────────────────────────────────
+  // For each driver × compound: collect valid lap times (no pit-out, no >1.2× fastest)
+  const compoundLapData = useMemo(() => {
+    const result = new Map<number, Map<string, number[]>>() // driverNum → compound → [lapTimes]
+    for (const stint of stints) {
+      const stintLapList = laps.filter(l =>
+        l.driver_number === stint.driver_number &&
+        l.lap_number >= stint.lap_start &&
+        l.lap_number <= (stint.lap_end ?? maxLaps) &&
+        isValidLap(l, sessionFastest)
+      )
+      if (stintLapList.length === 0) continue
+      if (!result.has(stint.driver_number)) result.set(stint.driver_number, new Map())
+      const dm = result.get(stint.driver_number)!
+      if (!dm.has(stint.compound)) dm.set(stint.compound, [])
+      dm.get(stint.compound)!.push(...stintLapList.map(l => l.lap_duration!))
+    }
+    return result
+  }, [stints, laps, sessionFastest, maxLaps])
+
+  // All compounds actually used
+  const usedCompounds = useMemo(() => {
+    const set = new Set<string>()
+    for (const dm of compoundLapData.values()) for (const c of dm.keys()) set.add(c)
+    return [...set].sort()
+  }, [compoundLapData])
+
+  // Chart data: one row per driver, one key per compound = avg lap time
+  const compoundAvgChartData = useMemo(() => {
+    return driverOrder.map(driverNum => {
+      const driver = drivers.find(d => d.driver_number === driverNum)
+      const row: Record<string, string | number> = {
+        driver: driver?.name_acronym ?? `#${driverNum}`,
+      }
+      const dm = compoundLapData.get(driverNum)
+      for (const compound of usedCompounds) {
+        const times = dm?.get(compound) ?? []
+        if (times.length > 0) {
+          row[compound] = Math.min(...times)          // show best lap per compound
+          row[`${compound}_avg`] = times.reduce((a, b) => a + b, 0) / times.length
+          row[`${compound}_count`] = times.length
+        }
+      }
+      return row
+    })
+  }, [driverOrder, drivers, compoundLapData, usedCompounds])
+
+  // Table rows: flat list of driver+compound stats, sorted by compound then avg time
+  const compoundTableRows = useMemo(() => {
+    const rows: Array<{
+      driverNum: number; name: string; color: string; teamName: string
+      compound: string; count: number; best: number; avg: number; stdDev: number
+    }> = []
+    for (const driverNum of driverOrder) {
+      const driver = drivers.find(d => d.driver_number === driverNum)
+      if (!driver) continue
+      const dm = compoundLapData.get(driverNum)
+      if (!dm) continue
+      const driverIdx = driverOrder.indexOf(driverNum)
+      for (const [compound, times] of dm) {
+        if (times.length === 0) continue
+        const avg = times.reduce((a, b) => a + b, 0) / times.length
+        const variance = times.reduce((a, b) => a + (b - avg) ** 2, 0) / times.length
+        rows.push({
+          driverNum, name: driver.name_acronym, color: getDriverColor(driver, driverIdx),
+          teamName: driver.team_name, compound, count: times.length,
+          best: Math.min(...times), avg, stdDev: Math.sqrt(variance),
+        })
+      }
+    }
+    return rows
+  }, [driverOrder, drivers, compoundLapData])
 
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-4">
@@ -321,6 +400,136 @@ export default function TireStrategy() {
               </table>
             </div>
           </Card>
+
+          {/* ── Compound lap time analysis ───────────────────────────── */}
+          {compoundLapData.size > 0 && usedCompounds.length > 0 && (
+            <Card className="p-5">
+              <SectionHeader
+                title="胎型圈速对比"
+                subtitle="各车手每种胎型的最快圈速（已剔除进站圈及慢圈）"
+              />
+
+              {/* Bar chart: X=driver, one bar per compound */}
+              <div className="h-72">
+                <ResponsiveContainer>
+                  <BarChart
+                    data={compoundAvgChartData}
+                    margin={{ top: 8, right: 20, left: 10, bottom: 40 }}
+                    barCategoryGap="15%"
+                    barGap={2}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#383850" />
+                    <XAxis
+                      dataKey="driver"
+                      stroke="#8888aa"
+                      tick={{ fontSize: 10 }}
+                      angle={-35}
+                      textAnchor="end"
+                    />
+                    <YAxis
+                      stroke="#8888aa"
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={v => formatLapTime(v)}
+                      domain={['auto', 'auto']}
+                      width={80}
+                    />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null
+                        return (
+                          <div className="bg-f1-card border border-f1-border rounded-lg p-3 text-xs shadow-xl">
+                            <p className="text-white font-semibold mb-2">{label}</p>
+                            {payload.map(p => {
+                              const compound = p.dataKey as string
+                              const count = (p.payload[`${compound}_count`] as number) || 0
+                              const avg = (p.payload[`${compound}_avg`] as number) || 0
+                              return (
+                                <div key={compound} className="flex items-center gap-2 mb-1">
+                                  <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: getTireColor(compound) }} />
+                                  <span className="text-f1-muted">{COMPOUND_NAMES[compound] || compound}</span>
+                                  <span className="font-mono text-white ml-auto">{formatLapTime(p.value as number)}</span>
+                                  <span className="text-f1-muted font-mono text-[10px]">
+                                    均值 {formatLapTime(avg)} · {count}圈
+                                  </span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )
+                      }}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
+                      formatter={v => COMPOUND_NAMES[v] || v}
+                    />
+                    {usedCompounds.map(compound => (
+                      <Bar
+                        key={compound}
+                        dataKey={compound}
+                        name={compound}
+                        fill={getTireColor(compound)}
+                        radius={[3, 3, 0, 0]}
+                        maxBarSize={28}
+                      />
+                    ))}
+                    {/* Reference line at session fastest */}
+                    {sessionFastest && (
+                      <ReferenceLine
+                        y={sessionFastest}
+                        stroke="#ffd700"
+                        strokeDasharray="4 3"
+                        strokeWidth={1}
+                        label={{ value: '最快圈', fill: '#ffd700', fontSize: 10, position: 'right' }}
+                      />
+                    )}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Detail table */}
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-xs min-w-[560px]">
+                  <thead>
+                    <tr className="border-b border-f1-border">
+                      {['车手', '车队', '胎型', '有效圈数', '最快圈', '平均圈速', '标准差'].map(h => (
+                        <th key={h} className="text-left text-f1-muted font-medium py-2 pr-4">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compoundTableRows
+                      .sort((a, b) => a.compound.localeCompare(b.compound) || a.avg - b.avg)
+                      .map((row, i) => (
+                        <tr key={i} className="border-b border-f1-border/40 hover:bg-f1-gray/30">
+                          <td className="py-2 pr-4">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: row.color }} />
+                              <span className="font-medium text-white">{row.name}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 pr-4 text-f1-muted text-[11px]">{row.teamName}</td>
+                          <td className="py-2 pr-4">
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold"
+                              style={{
+                                backgroundColor: getTireColor(row.compound),
+                                color: row.compound === 'HARD' ? '#000' : '#fff',
+                              }}
+                            >
+                              {getTireLetter(row.compound)} {row.compound}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-4 text-f1-muted">{row.count}</td>
+                          <td className="py-2 pr-4 font-mono text-white">{formatLapTime(row.best)}</td>
+                          <td className="py-2 pr-4 font-mono text-white">{formatLapTime(row.avg)}</td>
+                          <td className="py-2 font-mono text-f1-muted">{row.stdDev.toFixed(3)}s</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -328,7 +537,7 @@ export default function TireStrategy() {
         <div className="bg-f1-card border border-f1-border rounded-xl p-10 text-center">
           <Layers className="w-12 h-12 text-f1-muted mx-auto mb-3" />
           <p className="text-white font-medium mb-1">选择赛事查看轮胎策略</p>
-          <p className="text-f1-muted text-sm">支持胎型时间线、进站分析、轮胎使用统计</p>
+          <p className="text-f1-muted text-sm">支持胎型时间线、进站分析、轮胎使用统计、胎型圈速对比</p>
         </div>
       )}
     </div>
