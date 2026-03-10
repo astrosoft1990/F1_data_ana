@@ -71,12 +71,13 @@ export default function TireStrategy() {
   // Compound usage statistics
   const compoundStats = new Map<string, { count: number; avgLaps: number; totalLaps: number }>()
   for (const stint of stints) {
-    const existing = compoundStats.get(stint.compound) || { count: 0, avgLaps: 0, totalLaps: 0 }
+    const stintCompound = stint.compound ?? 'UNKNOWN'
+    const existing = compoundStats.get(stintCompound) || { count: 0, avgLaps: 0, totalLaps: 0 }
     const stintLaps = (stint.lap_end || maxLaps) - stint.lap_start + 1
     existing.count++
     existing.totalLaps += stintLaps
     existing.avgLaps = existing.totalLaps / existing.count
-    compoundStats.set(stint.compound, existing)
+    compoundStats.set(stintCompound, existing)
   }
 
   const compoundChartData = Array.from(compoundStats.entries()).map(([compound, stats]) => ({
@@ -113,10 +114,12 @@ export default function TireStrategy() {
         isValidLap(l, sessionFastest)
       )
       if (stintLapList.length === 0) continue
+      // Normalize null/undefined compound (API sometimes returns null)
+      const compound: string = stint.compound ?? 'UNKNOWN'
       if (!result.has(stint.driver_number)) result.set(stint.driver_number, new Map())
       const dm = result.get(stint.driver_number)!
-      if (!dm.has(stint.compound)) dm.set(stint.compound, [])
-      dm.get(stint.compound)!.push(...stintLapList.map(l => l.lap_duration!))
+      if (!dm.has(compound)) dm.set(compound, [])
+      dm.get(compound)!.push(...stintLapList.map(l => l.lap_duration!))
     }
     return result
   }, [stints, laps, sessionFastest, maxLaps])
@@ -226,18 +229,18 @@ export default function TireStrategy() {
                         return (
                           <div
                             key={stint.stint_number}
-                            title={`${COMPOUND_NAMES[stint.compound] || stint.compound} | L${stint.lap_start}-${stint.lap_end || '?'} | 胎龄+${stint.tyre_age_at_start}圈`}
+                            title={`${COMPOUND_NAMES[stint.compound ?? 'UNKNOWN'] || stint.compound} | L${stint.lap_start}-${stint.lap_end || '?'} | 胎龄+${stint.tyre_age_at_start}圈`}
                             className="absolute top-0 h-full flex items-center justify-center text-xs font-bold cursor-help hover:opacity-90 transition-opacity rounded-sm"
                             style={{
                               left: `${start}%`,
                               width: `${width}%`,
-                              backgroundColor: getTireColor(stint.compound),
-                              color: stint.compound === 'HARD' ? '#000' : '#fff',
+                              backgroundColor: getTireColor(stint.compound ?? 'UNKNOWN'),
+                              color: (stint.compound ?? 'UNKNOWN') === 'HARD' ? '#000' : '#fff',
                               borderRight: '2px solid rgba(21,21,30,0.5)',
                               minWidth: '8px',
                             }}
                           >
-                            {width > 4 ? getTireLetter(stint.compound) : ''}
+                            {width > 4 ? getTireLetter(stint.compound ?? 'UNKNOWN') : ''}
                           </div>
                         )
                       })}
@@ -381,9 +384,9 @@ export default function TireStrategy() {
                           {nextStint && (
                             <span
                               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold"
-                              style={{ backgroundColor: getTireColor(nextStint.compound), color: nextStint.compound === 'HARD' ? '#000' : '#fff' }}
+                              style={{ backgroundColor: getTireColor(nextStint.compound ?? 'UNKNOWN'), color: (nextStint.compound ?? 'UNKNOWN') === 'HARD' ? '#000' : '#fff' }}
                             >
-                              {getTireLetter(nextStint.compound)} {nextStint.compound}
+                              {getTireLetter(nextStint.compound ?? 'UNKNOWN')} {nextStint.compound ?? '?'}
                             </span>
                           )}
                         </td>
@@ -498,7 +501,7 @@ export default function TireStrategy() {
                   </thead>
                   <tbody>
                     {compoundTableRows
-                      .sort((a, b) => a.compound.localeCompare(b.compound) || a.avg - b.avg)
+                      .sort((a, b) => (a.compound ?? '').localeCompare(b.compound ?? '') || a.avg - b.avg)
                       .map((row, i) => (
                         <tr key={i} className="border-b border-f1-border/40 hover:bg-f1-gray/30">
                           <td className="py-2 pr-4">

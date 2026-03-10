@@ -135,11 +135,11 @@ export default function RaceAnalysis() {
     [positions, laps, selectedDrivers, drivers]
   )
 
-  // ── Box plot stats (all drivers, valid laps only: no pit-out, no >1.2× fastest) ─
+  // ── Box plot stats (all drivers, valid laps + manual range filter) ───────────
   const boxStats = useMemo(() => {
     return drivers.map((driver, i) => {
       const validLaps = (lapsByDriver.get(driver.driver_number) || [])
-        .filter(l => isValidLap(l, sessionFastest))
+        .filter(l => passesAllFilters(l))
         .map(l => l.lap_duration!)
       if (validLaps.length < 2) return null
       return computeBoxStats(
@@ -149,7 +149,7 @@ export default function RaceAnalysis() {
         validLaps,
       )
     }).filter(Boolean) as ReturnType<typeof computeBoxStats>[]
-  }, [drivers, lapsByDriver, sessionFastest])
+  }, [drivers, lapsByDriver, passesAllFilters])
 
   const filteredPits = pits.filter(p => selectedDrivers.includes(p.driver_number))
   const weatherSampled = weather.filter((_, i) => i % Math.max(1, Math.floor(weather.length / 60)) === 0)
@@ -307,9 +307,32 @@ export default function RaceAnalysis() {
                 title="圈速分布箱线图"
                 subtitle="全场车手 · 已剔除进站圈及 >1.2× 最快圈 · ◆ 均值  — 中位数  ○ 异常值"
                 actions={
-                  <div className="flex items-center gap-1 text-xs text-f1-muted">
-                    <BarChart2 className="w-4 h-4" />
-                    {boxStats.length} 位车手
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-f1-muted hidden sm:block">圈速范围(秒)</span>
+                    <input
+                      type="number"
+                      value={filterMin}
+                      onChange={e => setFilterMin(e.target.value)}
+                      placeholder={sessionFastest ? sessionFastest.toFixed(1) : '最小'}
+                      className="w-20 bg-f1-gray border border-f1-border text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-f1-red"
+                    />
+                    <span className="text-f1-muted">—</span>
+                    <input
+                      type="number"
+                      value={filterMax}
+                      onChange={e => setFilterMax(e.target.value)}
+                      placeholder={sessionFastest ? (sessionFastest * 1.2).toFixed(1) : '最大'}
+                      className="w-20 bg-f1-gray border border-f1-border text-white rounded px-2 py-1 text-xs focus:outline-none focus:border-f1-red"
+                    />
+                    {(filterMin || filterMax) && (
+                      <button
+                        onClick={() => { setFilterMin(''); setFilterMax('') }}
+                        className="text-f1-muted hover:text-white transition-colors"
+                      >✕</button>
+                    )}
+                    <div className="w-px h-4 bg-f1-border mx-1" />
+                    <BarChart2 className="w-4 h-4 text-f1-muted" />
+                    <span className="text-f1-muted">{boxStats.length} 位</span>
                   </div>
                 }
               />
